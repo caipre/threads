@@ -83,14 +83,14 @@ impl ThreadPool {
     pub fn with_capacity(n: usize) -> ThreadPool {
         let mut pool = ThreadPool::new();
         pool.cap = Arc::new(AtomicUsize::new(n));
-        for _ in 1..n {
+        for i in 1..n {
             ThreadPool::worker(pool.tasks.clone(), pool.stats.clone(), pool.cap.clone());
         }
         pool
     }
 
     pub fn len(&self) -> usize {
-        self.stats.threads.load(Ordering::Relaxed)
+        self.stats.threads.load(Ordering::SeqCst)
     }
 
     pub fn resize(mut self, n: usize) -> ThreadPool {
@@ -101,7 +101,7 @@ impl ThreadPool {
     pub fn exec<F>(&self, task: F)
         where F: FnMut() + Send + 'static
     {
-        self.chan.send(Box::new(move || task()));
+        self.chan.send(Box::new(task));
     }
 
     fn worker(chan: Arc<Mutex<Receiver<Task>>>, stats: Arc<Stats>, cap: Arc<AtomicUsize>) -> JoinHandle<()> {
@@ -110,7 +110,7 @@ impl ThreadPool {
             stats.threads.fetch_add(1, Ordering::SeqCst);
 
             loop {
-                if cap.load(Ordering::SeqCst) < stats.threads.load(Ordering::SeqCst) { break; }
+                // if cap.load(Ordering::SeqCst) < stats.threads.load(Ordering::SeqCst) { break; }
 
                 let message = {
                     let chan = chan.lock().unwrap();
@@ -133,13 +133,17 @@ impl ThreadPool {
 
 mod test {
     use std::sync::mpsc::channel;
+    use std::thread;
+    use std::time;
     use super::ThreadPool;
 
-    const NWORKERS: usize = 10;
+    const NWORKERS: usize = 1000;
 
     #[test]
     fn test_worker_creation() {
         let pool = ThreadPool::with_capacity(NWORKERS);
+        thread::sleep(time::Duration::from_millis(10000));
+
         assert_eq!(pool.len(), NWORKERS);
     }
 
@@ -151,6 +155,6 @@ mod test {
             let send = send.clone();
             pool.exec(move || send.send(1).unwrap() );
         }
-        assert_eq!(recv.recv().iter().take(NWORKERS).fold(0, |a, b| a + b), NWORKERS);
+        assert_eq!(recv.iter().take(NWORKERS).fold(0, |a, b| a + b), NWORKERS);
     }
 }
